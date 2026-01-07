@@ -1,65 +1,28 @@
 
-// components/water_json_handler/water_json_handler.h
-#pragma once
+import esphome.codegen as cg
+import esphome.config_validation as cv
+from esphome.components import sensor
+from esphome.const import CONF_ID
 
-#include "esphome.h"
-#include "esphome/components/web_server_base/web_server_base.h"
+# Namespace waarin de C++ class leeft:
+water_json_ns = cg.esphome_ns.namespace("water_json_handler")
+WaterJsonHandler = water_json_ns.class_("WaterJsonHandler", cg.Component)
 
-#ifdef ARDUINO
-  #include <ESPAsyncWebServer.h>
-#endif
+# YAML keys voor je sensors
+CONF_FLOW = "flow_sensor"
+CONF_TOTAL = "total_sensor"
 
-#include <cmath>
+# Component-config: een ID (de C++ instantie) en twee sensor-IDs
+CONFIG_SCHEMA = cv.Schema({
+    cv.GenerateID(CONF_ID): cv.declare_id(WaterJsonHandler),
+    cv.Required(CONF_FLOW): cv.use_id(sensor.Sensor),
+    cv.Required(CONF_TOTAL): cv.use_id(sensor.Sensor),
+})
 
-namespace esphome {
-namespace water_json_handler {
-
-class WaterJsonHandler : public Component, public AsyncWebHandler {
- public:
-  // YAML -> codegen koppelt hier de sensoren aan
-  void set_sources(sensor::Sensor *flow_sensor, sensor::Sensor *total_sensor) {
-    this->flow_  = flow_sensor;   // l/min
-    this->total_ = total_sensor;  // m³
-  }
-
-  void setup() override {
-    if (web_server_base::global_web_server_base != nullptr) {
-      web_server_base::global_web_server_base->add_handler(this);
-      ESP_LOGI("water_json", "Registered /json.html handler");
-    } else {
-      ESP_LOGW("water_json", "Web server base not available");
-    }
-  }
-
-  // Alleen GET /json.html accepteren
-  bool canHandle(AsyncWebServerRequest *request) override {
-    return request->method() == HTTP_GET && request->url() == "/json.html";
-  }
-
-  void handleRequest(AsyncWebServerRequest *request) override {
-    float flow_lmin = 0.0f;
-    float total_m3  = 0.0f;
-
-    if (this->flow_  && std::isfinite(this->flow_->state))  flow_lmin = this->flow_->state;
-    if (this->total_ && std::isfinite(this->total_->state)) total_m3  = this->total_->state;
-
-    long total_liters = lroundf(total_m3 * 1000.0f);
-
-    char body[128];
-    // Strings zoals je vroeg (hele liters / hele l/min)
-    snprintf(body, sizeof(body),
-             "{\"waterflow\":\"%.0f\",\"waterquantity\":\"%ld\"}",
-             flow_lmin, total_liters);
-
-    request->send(200, "application/json", body);
-  }
-
-  bool isRequestHandlerTrivial() override { return true; }
-
- protected:
-  sensor::Sensor *flow_{nullptr};
-  sensor::Sensor *total_{nullptr};
-};
-
-}  // namespace water_json_handler
-}  // namespace esphome
+# Codegen: instantie aanmaken, registreren en je sensors doorgeven aan set_sources()
+async def to_code(config):
+    var = cg.new_Pvariable(config[CONF_ID])
+    await cg.register_component(var, config)
+    flow = await cg.get_variable(config[CONF_FLOW])
+    total = await cg.get_variable(config[CONF_TOTAL])
+    cg.add(var.set_sources(flow, total))
