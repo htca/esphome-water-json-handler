@@ -4,7 +4,6 @@
 #include "esphome.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 
-// ESPHome uses USE_ARDUINO to gate the Arduino/ESPAsyncWebServer path
 #if defined(USE_ARDUINO)
   #include <ESPAsyncWebServer.h>
 #endif
@@ -14,27 +13,23 @@
 namespace esphome {
 namespace water_json_handler {
 
-// Arduino/ESP8266 (ESPAsyncWebServer) implementation
 #if defined(USE_ARDUINO)
 
 class WaterJsonHandler : public Component, public ::AsyncWebHandler {
  public:
-  // Link your sensors (flow in l/min, total in m³)
   void set_sources(sensor::Sensor *flow_sensor, sensor::Sensor *total_sensor) {
-    this->flow_  = flow_sensor;
-    this->total_ = total_sensor;
+    this->flow_  = flow_sensor;   // l/min
+    this->total_ = total_sensor;  // m³
   }
+
+  // Run late so the web_server is initialized
+  float get_setup_priority() const override { return esphome::setup_priority::LATE; }
 
   void setup() override {
-    if (web_server_base::global_web_server_base != nullptr) {
-      web_server_base::global_web_server_base->add_handler(this);
-      ESP_LOGI("water_json", "Registered /json.html handler (Arduino)");
-    } else {
-      ESP_LOGW("water_json", "Web server base not available");
-    }
+    // Try to attach immediately; if not ready, retry until success
+    this->attach_or_retry_();
   }
 
-  // NOTE: don't mark override — some cores differ slightly; matching name/signature is enough
   bool canHandle(::AsyncWebServerRequest *request) {
     return request && request->method() == HTTP_GET && request->url() == "/json.html";
   }
@@ -61,11 +56,29 @@ class WaterJsonHandler : public Component, public ::AsyncWebHandler {
  protected:
   sensor::Sensor *flow_{nullptr};
   sensor::Sensor *total_{nullptr};
+
+  void attach_or_retry_() {
+    if (web_server_base::global_web_server_base != nullptr) {
+      web_server_base::global_web_server_base->add_handler(this);
+      ESP_LOGI("water_json", "Registered /json.html handler");
+    } else {
+      // Web server not ready yet; retry in 1s
+      ESP_LOGW("water_json", "Web server not ready, will retry registration...");
+      this->set_interval(1000, [this]() {
+        if (web_server_base::global_web_server_base != nullptr) {
+          web_server_base::global_web_server_base->add_handler(this);
+          ESP_LOGI("water_json", "Registered /json.html handler (after retry)");
+          // Stop further retries
+          this->cancel_interval();
+        } else {
+          ESP_LOGW("water_json", "Web server still not ready, retrying...");
+        }
+      });
+    }
+  }
 };
 
-// Non‑Arduino (ESP‑IDF) fallback: just register component and log a message.
-// (Custom endpoints need a different backend; your node is ESP8266, so this path won’t be used.)
-#else
+#else  // Non‑Arduino backend fallback
 
 class WaterJsonHandler : public Component {
  public:
@@ -74,7 +87,9 @@ class WaterJsonHandler : public Component {
     this->total_ = total_sensor;
   }
 
-  void setup() override {
+  float get_setup_priority() const override { return esphome::setup_priority::LATE; }
+
+   void setup() override {
     ESP_LOGW("water_json", "Custom /json.html endpoint not available on non‑Arduino backend.");
   }
 
@@ -86,4 +101,3 @@ class WaterJsonHandler : public Component {
 #endif  // USE_ARDUINO
 
 }  // namespace water_json_handler
-}  // namespace esphome
