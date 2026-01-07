@@ -1,133 +1,49 @@
 
+// components/water_json_page/water_json_page.h
 #pragma once
-
-#include "esphome.h"
-#include "esphome/components/web_server_base/web_server_base.h"
-
-#if defined(USE_ARDUINO)
-  #include <ESPAsyncWebServer.h>
-#endif
-
-#include <cmath>
+#include "esphome/core/component.h"
+#include "esphome/components/sensor/sensor.h"
+#include "esphome/components/web_server/web_server.h"
 
 namespace esphome {
-namespace water_json_handler {
+namespace water_json_page {
 
-#if defined(USE_ARDUINO)
-
-class WaterJsonHandler : public Component {
+class WaterJsonPage : public Component {
  public:
-  void set_sources(sensor::Sensor *flow_sensor, sensor::Sensor *total_sensor) {
-    this->flow_  = flow_sensor;   // l/min
-    this->total_ = total_sensor;  // m³
-  }
+  void set_flow_sensor(sensor::Sensor *s) { flow_ = s; }
+  void set_total_sensor(sensor::Sensor *s) { total_ = s; }
 
-  // Run after the web_server initializes
-  float get_setup_priority() const override { return esphome::setup_priority::LATE; }
+  float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   void setup() override {
-    this->attach_or_retry_();
+#ifdef USE_WEBSERVER
+    using web_server::WebServer;
+    auto *ws = WebServer::global_web_server;
+    if (ws == nullptr) return;
+    ws->get_web_server_base()->add_handler(
+      new web_server_base::StaticRequestHandler(
+        "/json.html",
+        [this](AsyncWeb  char buf[128];
+          float flow  = this->flow_  ? this->flow_->state  : NAN;
+          float total = this->total_ ? this->total_->state : NAN;
+          // Adjust formatting as you like
+          int n = snprintf(buf, sizeof(buf),
+                           "{\"waterflow\":\"%.1f\",\"waterquantity\":\"%.3f\"}",
+                           isfinite(flow) ? flow : 0.0f,
+                           isfinite(total) ? total : 0.0f);
+          auto *resp = request->beginResponse(200, "application/json",
+                                              String(buf).substring(0, n));
+          request->send(resp);
+        }
+      )
+    );
+#endif
   }
 
  protected:
   sensor::Sensor *flow_{nullptr};
   sensor::Sensor *total_{nullptr};
-
-  void attach_or_retry_() {
-    static constexpr const char* kRetryName = "json_register_retry";
-
-    auto *base = web_server_base::global_web_server_base;
-    if (base != nullptr) {
-      auto *server = base->get_server();   // underlying AsyncWebServer*
-      if (server != nullptr) {
-        // Primary endpoint
-        server->on("/json.html", HTTP_GET, [this](AsyncWebServerRequest *request) {
-          float flow_lmin = 0.0f;
-          float total_m3  = 0.0f;
-
-          if (this->flow_  && std::isfinite(this->flow_->state))  flow_lmin = this->flow_->state;
-          if (this->total_ && std::isfinite(this->total_->state)) total_m3  = this->total_->state;
-
-          long total_liters = lroundf(total_m3 * 1000.0f);
-
-          char body[128];
-          snprintf(body, sizeof(body),
-                   "{\"waterflow\":\"%.0f\",\"waterquantity\":\"%ld\"}",
-                   flow_lmin, total_liters);
-          request->send(200, "application/json", body);
-        });
-
-        // Optional alias: /json
-        server->on("/json", HTTP_GET, [this](AsyncWebServerRequest *request) {
-          float flow_lmin = (this->flow_  && std::isfinite(this->flow_->state))  ? this->flow_->state  : 0.0f;
-          float total_m3  = (this->total_ && std::isfinite(this->total_->state)) ? this->total_->state : 0.0f;
-          long total_liters = lroundf(total_m3 * 1000.0f);
-          char body[128];
-          snprintf(body, sizeof(body),
-                   "{\"waterflow\":\"%.0f\",\"waterquantity\":\"%ld\"}",
-                   flow_lmin, total_liters);
-          request->send(200, "application/json", body);
-        });
-
-        ESP_LOGI("water_json", "Registered /json.html and /json handlers");
-        return;
-      }
-    }
-
-    // Not ready yet → retry every 1000 ms
-    ESP_LOGW("water_json", "Web server not ready; will retry...");
-    this->set_interval(kRetryName, 1000, [this]() {
-      auto *base = web_server_base::global_web_server_base;
-      if (base != nullptr && base->get_server() != nullptr) {
-        auto *server = base->get_server();
-        server->on("/json.html", HTTP_GET, [this](AsyncWebServerRequest *request) {
-          float flow_lmin = (this->flow_  && std::isfinite(this->flow_->state))  ? this->flow_->state  : 0.0f;
-          float total_m3  = (this->total_ && std::isfinite(this->total_->state)) ? this->total_->state : 0.0f;
-          long total_liters = lroundf(total_m3 * 1000.0f);
-          char body[128];
-          snprintf(body, sizeof(body),
-                   "{\"waterflow\":\"%.0f\",\"waterquantity\":\"%ld\"}",
-                   flow_lmin, total_liters);
-          request->send(200, "application/json", body);
-        });
-        server->on("/json", HTTP_GET, [this](AsyncWebServerRequest *request) {
-          float flow_lmin = (this->flow_  && std::isfinite(this->flow_->state))  ? this->flow_->state  : 0.0f;
-          float total_m3  = (this->total_ && std::isfinite(this->total_->state)) ? this->total_->state : 0.0f;
-          long total_liters = lroundf(total_m3 * 1000.0f);
-          char body[128];
-          snprintf(body, sizeof(body),
-                   "{\"waterflow\":\"%.0f\",\"waterquantity\":\"%ld\"}",
-                   flow_lmin, total_liters);
-          request->send(200, "application/json", body);
-        });
-        ESP_LOGI("water_json", "Registered /json.html and /json handlers (after retry)");
-        this->cancel_interval(kRetryName);
-      } else {
-        ESP_LOGW("water_json", "Web server still not ready; retrying...");
-      }
-    });
-  }
-
 };
 
-#else  // Non‑Arduino backend
-
-class WaterJsonHandler : public Component {
- public:
-  void set_sources(sensor::Sensor *flow_sensor, sensor::Sensor *total_sensor) {
-    this->flow_  = flow_sensor;
-    this->total_ = total_sensor;
-  }
-  float get_setup_priority() const override { return esphome::setup_priority::LATE; }
-  void setup() override {
-    ESP_LOGW("water_json", "Custom /json.html endpoint not available on non‑Arduino backend.");
-  }
- protected:
-  sensor::Sensor *flow_{nullptr};
-  sensor::Sensor *total_{nullptr};
-};
-
-#endif  // USE_ARDUINO
-
-}  // namespace water_json_handler
+}  // namespace water_json_page
 }  // namespace esphome
